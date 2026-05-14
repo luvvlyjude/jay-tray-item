@@ -231,10 +231,17 @@ fn render_icon(icon_spec: Option<&str>, width: u32, height: u32) -> Vec<u8> {
 fn load_icon(spec: &str, width: u32, height: u32) -> Option<Vec<u8>> {
     let path = Path::new(spec);
     if path.exists() {
-        return load_png_as_argb(path, width, height);
+        return load_image_as_argb(path, width, height);
     }
     let found = find_icon_file(spec, width as i32)?;
-    load_png_as_argb(&found, width, height)
+    load_image_as_argb(&found, width, height)
+}
+
+fn load_image_as_argb(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("svg") => load_svg_as_argb(path, width, height),
+        _ => load_png_as_argb(path, width, height),
+    }
 }
 
 fn load_png_as_argb(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
@@ -248,6 +255,38 @@ fn load_png_as_argb(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
     for pixel in img.pixels() {
         let [r, g, b, a] = pixel.0;
         // ARGB8888 on little-endian: bytes are B, G, R, A
+        argb.extend_from_slice(&[b, g, r, a]);
+    }
+    Some(argb)
+}
+
+fn load_svg_as_argb(path: &Path, width: u32, height: u32) -> Option<Vec<u8>> {
+    let data = std::fs::read(path).ok()?;
+    let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let svg_size = tree.size();
+    let sx = width as f32 / svg_size.width();
+    let sy = height as f32 / svg_size.height();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(sx, sy),
+        &mut pixmap.as_mut(),
+    );
+    // resvg produces premultiplied RGBA; convert to straight ARGB8888 (LE: B, G, R, A)
+    let mut argb = Vec::with_capacity((width * height * 4) as usize);
+    for px in pixmap.pixels() {
+        let a = px.alpha();
+        let (r, g, b) = if a == 0 {
+            (0, 0, 0)
+        } else {
+            // undo premultiplication
+            let scale = 255.0 / a as f32;
+            (
+                (px.red() as f32 * scale).round() as u8,
+                (px.green() as f32 * scale).round() as u8,
+                (px.blue() as f32 * scale).round() as u8,
+            )
+        };
         argb.extend_from_slice(&[b, g, r, a]);
     }
     Some(argb)
@@ -280,6 +319,13 @@ fn find_icon_file(name: &str, preferred_size: i32) -> Option<PathBuf> {
                 if p.exists() {
                     return Some(p);
                 }
+            }
+        }
+        // Scalable SVG — preferred over small raster sizes, checked after sized PNGs
+        for subdir in &subdirs {
+            let p = PathBuf::from(format!("{base}/icons/hicolor/scalable/{subdir}/{name}.svg"));
+            if p.exists() {
+                return Some(p);
             }
         }
         let p = PathBuf::from(format!("{base}/pixmaps/{name}.png"));
