@@ -41,10 +41,6 @@ struct Args {
     #[arg(long)]
     icon: Option<String>,
 
-    /// Tooltip text (reserved for future implementation)
-    #[arg(long)]
-    tooltip: Option<String>,
-
     /// Shell command to run on left click
     #[arg(long, value_name = "CMD")]
     left_click: Option<String>,
@@ -80,9 +76,6 @@ struct State {
 
 impl State {
     fn new(args: Args, registry: WlRegistry) -> Self {
-        if args.tooltip.is_some() {
-            log::warn!("--tooltip is accepted but not yet displayed");
-        }
         Self {
             registry,
             compositor: None,
@@ -118,6 +111,7 @@ impl State {
         }
 
         let compositor = require!(compositor, "wl_compositor");
+        require!(shm, "wl_shm");
         let jay_tray = require!(jay_tray, "jay_tray_v1 — is this the Jay compositor?");
 
         let surface = compositor.create_surface();

@@ -9,7 +9,6 @@ jay-tray-item [OPTIONS]
 
 Options:
       --icon <icon>              PNG or SVG file path, or a freedesktop icon name
-      --tooltip <tooltip>        Tooltip text (reserved for future implementation)
       --left-click <CMD>         Shell command to run on left click
       --right-click <CMD>        Shell command to run on right click
       --middle-click <CMD>       Shell command to run on middle click
