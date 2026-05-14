@@ -1,6 +1,6 @@
 # custom-jay-tray-item
 
-A Wayland tray item for the [Jay compositor](https://github.com/mahkoh/jay) using the `jay_tray_v1` protocol. Displays a custom icon in Jay's system tray and executes configurable commands on click.
+A [`jay_tray_v1`](https://github.com/mahkoh/jay) tray item client for the Jay compositor. Displays a custom icon in Jay's system tray and executes configurable shell commands on click.
 
 ## Usage
 
@@ -38,37 +38,17 @@ Commands are passed to `sh -c` and spawned detached — the tray item remains ru
 
 ## Installation
 
-### Arch Linux
+Requires `cargo` and `rustc`.
 
 ```sh
+git clone https://github.com/luvvlyjude/custom-jay-tray-item
+cd custom-jay-tray-item
 cargo install --path .
 ```
 
-Or with the provided PKGBUILD (if available):
+A `flake.nix` is included for NixOS users.
 
-```sh
-makepkg -si
-```
-
-### NixOS
-
-Add the flake to your inputs and include the package:
-
-```nix
-# flake.nix
-inputs.custom-jay-tray-item.url = "github:youruser/custom-jay-tray-item";
-
-# In your system or home-manager config:
-environment.systemPackages = [ inputs.custom-jay-tray-item.packages.${system}.default ];
-```
-
-Or run directly without installing:
-
-```sh
-nix run github:youruser/custom-jay-tray-item -- --icon my-icon --left-click "my-command"
-```
-
-## Icon resolution
+## Icons
 
 When `--icon` is a file path that exists, it is loaded directly (PNG and SVG supported). Otherwise the value is treated as a freedesktop icon name and searched in:
 
@@ -80,10 +60,10 @@ When `--icon` is a file path that exists, it is loaded directly (PNG and SVG sup
 
 ## Dependencies
 
-Runtime: `libwayland-client.so` (provided by `wayland` package).
+Runtime: `wayland`
 
-Build: Rust toolchain, wayland protocol XML files (provided by `wayland` and `wayland-protocols` packages).
+Build: `rust`, `wayland`, `wayland-protocols`
 
 ## Protocol
 
-Uses the `jay_tray_v1` Wayland extension protocol, which is only supported by the Jay compositor. The protocol XML is included in `wayland-protocols/jay-tray-v1.xml`.
+Uses the `jay_tray_v1` protocol, which is specific to the Jay compositor. The protocol XML is included in `wayland-protocols/jay-tray-v1.xml`.

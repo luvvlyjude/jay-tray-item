@@ -1,48 +1,38 @@
 {
-  description = "Custom Jay tray item";
+  description = "jay_tray_v1 tray item client for the Jay compositor";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ rust-overlay.overlays.default ];
-        };
-
-        rustToolchain = pkgs.rust-bin.stable.latest.default;
-
-        buildInputs = with pkgs; [
-          wayland
-        ];
-
-        nativeBuildInputs = with pkgs; [
-          rustToolchain
-          pkg-config
-        ];
+        pkgs = import nixpkgs { inherit system; };
+        waylandLibs = with pkgs; [ wayland ];
       in {
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "custom-jay-tray-item";
+          pname = "jay-tray-item";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
 
-          inherit buildInputs nativeBuildInputs;
+          buildInputs = waylandLibs;
+          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
 
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          # wl-client loads libwayland-client.so at runtime via dlopen;
+          # wrap the binary so the library is findable outside of nix-shell.
+          postInstall = ''
+            wrapProgram $out/bin/jay-tray-item \
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath waylandLibs}
+          '';
         };
 
         devShells.default = pkgs.mkShell {
-          inherit buildInputs nativeBuildInputs;
-          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          buildInputs = waylandLibs;
+          nativeBuildInputs = with pkgs; [ cargo rustc pkg-config ];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath waylandLibs;
         };
       });
 }
