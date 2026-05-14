@@ -8,7 +8,7 @@ A Wayland tray item for the [Jay compositor](https://github.com/mahkoh/jay) usin
 jay-tray-item [OPTIONS]
 
 Options:
-      --icon <icon>              PNG file path or freedesktop icon name
+      --icon <icon>              PNG or SVG file path, or a freedesktop icon name
       --tooltip <tooltip>        Tooltip text (reserved for future implementation)
       --left-click <CMD>         Shell command to run on left click
       --right-click <CMD>        Shell command to run on right click
@@ -71,10 +71,12 @@ nix run github:youruser/custom-jay-tray-item -- --icon my-icon --left-click "my-
 
 ## Icon resolution
 
-When `--icon` is a file path that exists, it is loaded directly (PNG only). Otherwise the value is treated as a freedesktop icon name and searched in:
+When `--icon` is a file path that exists, it is loaded directly (PNG and SVG supported). Otherwise the value is treated as a freedesktop icon name and searched in:
 
 - `$XDG_DATA_HOME/icons/hicolor/<size>x<size>/<category>/<name>.png`
-- `$XDG_DATA_DIRS/icons/hicolor/...`
+- `$XDG_DATA_DIRS/icons/hicolor/<size>x<size>/...`
+- `$XDG_DATA_HOME/icons/hicolor/scalable/<category>/<name>.svg`
+- `$XDG_DATA_DIRS/icons/hicolor/scalable/...`
 - `$XDG_DATA_DIRS/pixmaps/<name>.png`
 
 ## Dependencies

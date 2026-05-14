@@ -37,7 +37,7 @@ const BTN_MIDDLE: u32 = 0x112;
 #[derive(Parser)]
 #[command(version, about = "Displays a custom item in Jay's system tray")]
 struct Args {
-    /// PNG file path or freedesktop icon name
+    /// PNG or SVG file path, or a freedesktop icon name
     #[arg(long)]
     icon: Option<String>,
 
@@ -302,6 +302,10 @@ fn find_icon_file(name: &str, preferred_size: i32) -> Option<PathBuf> {
     let mut bases: Vec<String> = vec![xdg_data_home];
     bases.extend(xdg_data_dirs.split(':').map(str::to_string));
 
+    find_icon_in_dirs(name, preferred_size, &bases)
+}
+
+fn find_icon_in_dirs(name: &str, preferred_size: i32, bases: &[String]) -> Option<PathBuf> {
     let mut sizes: Vec<i32> = vec![256, 128, 96, 64, 48, 36, 32, 24, 22, 16];
     if !sizes.contains(&preferred_size) {
         sizes.push(preferred_size);
@@ -310,7 +314,7 @@ fn find_icon_file(name: &str, preferred_size: i32) -> Option<PathBuf> {
 
     let subdirs = ["apps", "status", "devices", "actions", "categories", "mimetypes"];
 
-    for base in &bases {
+    for base in bases {
         for &size in &sizes {
             for subdir in &subdirs {
                 let p = PathBuf::from(format!(
@@ -531,5 +535,180 @@ fn main() {
             eprintln!("Wayland dispatch error: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_test_png(path: &Path, width: u32, height: u32, rgba: [u8; 4]) {
+        let mut img = image::RgbaImage::new(width, height);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba(rgba);
+        }
+        img.save(path).unwrap();
+    }
+
+    fn minimal_svg(fill: &str) -> String {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="{fill}"/></svg>"#
+        )
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    // --- PNG ---
+
+    #[test]
+    fn png_exact_size_returns_correct_byte_count() {
+        let p = tmp("test_png_exact.png");
+        write_test_png(&p, 32, 32, [0, 255, 0, 255]);
+        let out = load_png_as_argb(&p, 32, 32).unwrap();
+        assert_eq!(out.len(), 32 * 32 * 4);
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn png_scales_to_target_dimensions() {
+        let p = tmp("test_png_scale.png");
+        write_test_png(&p, 64, 64, [0, 0, 255, 255]);
+        let out = load_png_as_argb(&p, 24, 24).unwrap();
+        assert_eq!(out.len(), 24 * 24 * 4);
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn png_pixel_bytes_are_argb8888_little_endian() {
+        // Pure red, opaque → ARGB8888 LE bytes: B=0 G=0 R=255 A=255
+        let p = tmp("test_png_pixel.png");
+        write_test_png(&p, 1, 1, [255, 0, 0, 255]);
+        let out = load_png_as_argb(&p, 1, 1).unwrap();
+        assert_eq!(out, &[0, 0, 255, 255]);
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn png_missing_file_returns_none() {
+        let out = load_png_as_argb(Path::new("/no/such/icon.png"), 32, 32);
+        assert!(out.is_none());
+    }
+
+    // --- SVG ---
+
+    #[test]
+    fn svg_renders_to_correct_byte_count() {
+        let p = tmp("test_svg_size.svg");
+        fs::write(&p, minimal_svg("red")).unwrap();
+        let out = load_svg_as_argb(&p, 24, 24).unwrap();
+        assert_eq!(out.len(), 24 * 24 * 4);
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn svg_opaque_fill_produces_full_alpha() {
+        let p = tmp("test_svg_alpha.svg");
+        fs::write(&p, minimal_svg("blue")).unwrap();
+        let out = load_svg_as_argb(&p, 4, 4).unwrap();
+        // Every pixel of a viewport-filling opaque rect must have alpha=255
+        for chunk in out.chunks(4) {
+            assert_eq!(chunk[3], 255, "expected alpha=255, got {:?}", chunk);
+        }
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn svg_empty_canvas_produces_zero_alpha() {
+        let p = tmp("test_svg_transparent.svg");
+        fs::write(&p, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#).unwrap();
+        let out = load_svg_as_argb(&p, 4, 4).unwrap();
+        for chunk in out.chunks(4) {
+            assert_eq!(chunk[3], 0, "expected alpha=0, got {:?}", chunk);
+        }
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn svg_missing_file_returns_none() {
+        let out = load_svg_as_argb(Path::new("/no/such/icon.svg"), 32, 32);
+        assert!(out.is_none());
+    }
+
+    // --- load_image_as_argb dispatch ---
+
+    #[test]
+    fn dispatch_routes_svg_extension_to_svg_loader() {
+        let p = tmp("test_dispatch.svg");
+        fs::write(&p, minimal_svg("green")).unwrap();
+        assert!(load_image_as_argb(&p, 8, 8).is_some());
+        fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn dispatch_routes_png_extension_to_png_loader() {
+        let p = tmp("test_dispatch.png");
+        write_test_png(&p, 8, 8, [128, 128, 128, 255]);
+        assert!(load_image_as_argb(&p, 8, 8).is_some());
+        fs::remove_file(p).ok();
+    }
+
+    // --- find_icon_in_dirs ---
+
+    #[test]
+    fn find_icon_locates_sized_png() {
+        let base = tmp("icon_theme_test_png");
+        let icon_dir = base.join("icons/hicolor/32x32/apps");
+        fs::create_dir_all(&icon_dir).unwrap();
+        let icon = icon_dir.join("my-test-icon-png.png");
+        write_test_png(&icon, 32, 32, [0, 200, 0, 255]);
+
+        let bases = vec![base.to_str().unwrap().to_string()];
+        let found = find_icon_in_dirs("my-test-icon-png", 32, &bases);
+
+        fs::remove_dir_all(&base).ok();
+        assert_eq!(found.as_deref(), Some(icon.as_path()));
+    }
+
+    #[test]
+    fn find_icon_locates_scalable_svg() {
+        let base = tmp("icon_theme_test_svg");
+        let icon_dir = base.join("icons/hicolor/scalable/apps");
+        fs::create_dir_all(&icon_dir).unwrap();
+        let icon = icon_dir.join("my-test-icon-svg.svg");
+        fs::write(&icon, minimal_svg("purple")).unwrap();
+
+        let bases = vec![base.to_str().unwrap().to_string()];
+        let found = find_icon_in_dirs("my-test-icon-svg", 32, &bases);
+
+        fs::remove_dir_all(&base).ok();
+        assert_eq!(found.as_deref(), Some(icon.as_path()));
+    }
+
+    #[test]
+    fn find_icon_prefers_sized_png_over_scalable_svg() {
+        let base = tmp("icon_theme_test_prefer");
+        let png_dir = base.join("icons/hicolor/32x32/apps");
+        let svg_dir = base.join("icons/hicolor/scalable/apps");
+        fs::create_dir_all(&png_dir).unwrap();
+        fs::create_dir_all(&svg_dir).unwrap();
+        let png = png_dir.join("my-test-icon-prefer.png");
+        let svg = svg_dir.join("my-test-icon-prefer.svg");
+        write_test_png(&png, 32, 32, [255, 0, 0, 255]);
+        fs::write(&svg, minimal_svg("red")).unwrap();
+
+        let bases = vec![base.to_str().unwrap().to_string()];
+        let found = find_icon_in_dirs("my-test-icon-prefer", 32, &bases);
+
+        fs::remove_dir_all(&base).ok();
+        assert_eq!(found.as_deref(), Some(png.as_path()));
+    }
+
+    #[test]
+    fn find_icon_returns_none_for_unknown_name() {
+        let bases = vec!["/tmp".to_string()];
+        assert!(find_icon_in_dirs("__no_such_icon_xyzzy__", 32, &bases).is_none());
     }
 }
