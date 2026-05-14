@@ -514,7 +514,7 @@ fn main() {
         }
     };
 
-    let (_owner, queue) = conn.create_queue_with_data::<State>(c"custom-jay-tray-item");
+    let (_owner, queue) = conn.create_queue_with_data::<State>(c"jay-tray-item");
     let display = queue.display::<WlDisplay>();
     let registry = display.get_registry();
     proxy::set_event_handler(&registry, RegistryHandler);

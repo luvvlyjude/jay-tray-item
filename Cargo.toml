@@ -1,5 +1,5 @@
 [package]
-name = "custom-jay-tray-item"
+name = "jay-tray-item"
 version = "0.1.0"
 edition = "2024"
 

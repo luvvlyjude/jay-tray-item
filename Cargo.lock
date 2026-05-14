@@ -192,21 +192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "custom-jay-tray-item"
-version = "0.1.0"
-dependencies = [
- "clap",
- "env_logger",
- "image",
- "log",
- "memfile",
- "resvg",
- "thiserror",
- "wl-client",
- "wl-client-builder",
-]
-
-[[package]]
 name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,6 +339,21 @@ name = "isnt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a7558cc96ddcaf0b4144d7149984ace2899bb29d4ee2999979d429efc305200"
+
+[[package]]
+name = "jay-tray-item"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger",
+ "image",
+ "log",
+ "memfile",
+ "resvg",
+ "thiserror",
+ "wl-client",
+ "wl-client-builder",
+]
 
 [[package]]
 name = "jiff"

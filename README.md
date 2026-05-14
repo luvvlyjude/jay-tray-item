@@ -1,4 +1,4 @@
-# custom-jay-tray-item
+# jay-tray-item
 
 A [`jay_tray_v1`](https://github.com/mahkoh/jay) tray item client for the Jay compositor. Displays a custom icon in Jay's system tray and executes configurable shell commands on click.
 
@@ -41,8 +41,8 @@ Commands are passed to `sh -c` and spawned detached — the tray item remains ru
 Requires `cargo` and `rustc`.
 
 ```sh
-git clone https://github.com/luvvlyjude/custom-jay-tray-item
-cd custom-jay-tray-item
+git clone https://github.com/luvvlyjude/jay-tray-item
+cd jay-tray-item
 cargo install --path .
 ```
 
