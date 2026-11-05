@@ -3,61 +3,77 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    systems.url = "github:nix-systems/default-linux";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        inherit (pkgs) lib;
-        waylandLibs = [ pkgs.wayland ];
-        version = (lib.importTOML ./Cargo.toml).package.version;
-        src = lib.fileset.toSource {
-          root = ./.;
-          fileset = lib.fileset.unions [
-            ./Cargo.toml
-            ./Cargo.lock
-            ./build.rs
-            ./src
-            ./wayland-protocols
-          ];
-        };
-      in {
-        formatter = pkgs.nixfmt-rfc-style;
+  outputs =
+    { nixpkgs, systems, ... }:
+    let
+      forAllSystems =
+        f: nixpkgs.lib.genAttrs (import systems) (system: f nixpkgs.legacyPackages.${system});
 
-        packages.default = pkgs.rustPlatform.buildRustPackage {
+      package =
+        {
+          lib,
+          makeWrapper,
+          rustPlatform,
+          wayland,
+        }:
+        rustPlatform.buildRustPackage {
           pname = "jay-tray-item";
-          inherit version src;
+          version = (lib.importTOML ./Cargo.toml).package.version;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./build.rs
+              ./src
+              ./wayland-protocols
+            ];
+          };
           cargoLock.lockFile = ./Cargo.lock;
 
-          buildInputs = waylandLibs;
-          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
+          nativeBuildInputs = [ makeWrapper ];
 
           # wl-client dlopen()s libwayland-client.so at runtime; wrap the binary
           # so the library is on LD_LIBRARY_PATH outside of a nix shell.
           postInstall = ''
             wrapProgram $out/bin/jay-tray-item \
-              --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath waylandLibs}
+              --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ wayland ]}
           '';
 
           meta = {
             description = "Displays a custom icon in Jay's system tray and runs shell commands on click";
+            homepage = "https://github.com/luvvlyjude/jay-tray-item";
+            license = lib.licenses.mit;
             mainProgram = "jay-tray-item";
+            platforms = lib.platforms.linux;
           };
         };
+    in
+    {
+      overlays.default = final: _prev: {
+        jay-tray-item = final.callPackage package { };
+      };
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = waylandLibs;
+      formatter = forAllSystems (pkgs: pkgs.nixfmt);
+
+      packages = forAllSystems (pkgs: {
+        default = pkgs.callPackage package { };
+      });
+
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             cargo
             rustc
             clippy
             rustfmt
             rust-analyzer
-            pkg-config
           ];
-          LD_LIBRARY_PATH = lib.makeLibraryPath waylandLibs;
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.wayland ];
         };
       });
+    };
 }
