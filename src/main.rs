@@ -12,6 +12,7 @@ use protocols::{
         wl_callback::{WlCallbackEventHandler, WlCallbackRef},
         wl_compositor::WlCompositor,
         wl_display::WlDisplay,
+        wl_output::{WlOutput, WlOutputEventHandler, WlOutputRef},
         wl_pointer::{WlPointer, WlPointerButtonState, WlPointerEventHandler, WlPointerRef},
         wl_registry::{WlRegistry, WlRegistryEventHandler, WlRegistryRef},
         wl_seat::{WlSeat, WlSeatCapability, WlSeatEventHandler, WlSeatRef},
@@ -24,6 +25,7 @@ use protocols::{
 use clap::Parser;
 use image::imageops::FilterType;
 use memfile::{MemFile, Seal};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -41,6 +43,10 @@ struct Args {
     #[arg(long)]
     icon: Option<String>,
 
+    /// Only show on this output, by connector name (see `jay randr`), e.g. DP-1
+    #[arg(long, value_name = "NAME")]
+    output: Option<String>,
+
     /// Shell command to run on left click
     #[arg(long, value_name = "CMD")]
     left_click: Option<String>,
@@ -54,21 +60,52 @@ struct Args {
     middle_click: Option<String>,
 }
 
+/// One tray item per jay_tray_v1 global. Jay advertises one global per output.
+struct Tray {
+    tray_item: Option<JayTrayItemV1>,
+    surface: Option<WlSurface>,
+    current_buffer: Option<WlBuffer>,
+    jay_tray: JayTrayV1,
+    pending_size: Option<(i32, i32)>,
+    size: (i32, i32),
+    scale: i32,
+    output_name: Option<String>,
+}
+
+impl Drop for Tray {
+    // wl-client's Drop frees the proxy without sending the destructor request.
+    fn drop(&mut self) {
+        // Jay rejects destroying a surface whose role object is still alive.
+        if let Some(tray_item) = &self.tray_item {
+            tray_item.destroy();
+        }
+        if let Some(surface) = &self.surface {
+            surface.destroy();
+        }
+        if let Some(buffer) = &self.current_buffer {
+            buffer.destroy();
+        }
+        self.jay_tray.destroy();
+    }
+}
+
+struct Output {
+    proxy: WlOutput,
+    name: Option<String>,
+}
+
 struct State {
     registry: WlRegistry,
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
-    jay_tray: Option<JayTrayV1>,
+    initialized: bool,
+    trays: HashMap<u32, Tray>,
+    outputs: HashMap<u32, Output>,
     seat: Option<WlSeat>,
     pointer: Option<WlPointer>,
-    surface: Option<WlSurface>,
-    tray_item: Option<JayTrayItemV1>,
-    pending_size: Option<(i32, i32)>,
-    size: (i32, i32),
-    scale: i32,
     pointer_on_surface: bool,
-    current_buffer: Option<WlBuffer>,
     icon: Option<String>,
+    output: Option<String>,
     left_click: Option<String>,
     right_click: Option<String>,
     middle_click: Option<String>,
@@ -80,17 +117,14 @@ impl State {
             registry,
             compositor: None,
             shm: None,
-            jay_tray: None,
+            initialized: false,
+            trays: HashMap::new(),
+            outputs: HashMap::new(),
             seat: None,
             pointer: None,
-            surface: None,
-            tray_item: None,
-            pending_size: None,
-            size: (0, 0),
-            scale: 1,
             pointer_on_surface: false,
-            current_buffer: None,
             icon: args.icon,
+            output: args.output,
             left_click: args.left_click,
             right_click: args.right_click,
             middle_click: args.middle_click,
@@ -100,27 +134,58 @@ impl State {
     fn initialize(&mut self) {
         macro_rules! require {
             ($field:ident, $name:literal) => {
-                match &self.$field {
-                    Some(v) => v.clone(),
-                    None => {
-                        eprintln!("Error: compositor does not advertise {}", $name);
-                        std::process::exit(1);
-                    }
+                if self.$field.is_none() {
+                    eprintln!("Error: compositor does not advertise {}", $name);
+                    std::process::exit(1);
                 }
             };
         }
 
-        let compositor = require!(compositor, "wl_compositor");
+        require!(compositor, "wl_compositor");
         require!(shm, "wl_shm");
-        let jay_tray = require!(jay_tray, "jay_tray_v1 — is this the Jay compositor?");
+        if self.trays.is_empty() {
+            eprintln!("Error: compositor does not advertise jay_tray_v1 — is this the Jay compositor?");
+            std::process::exit(1);
+        }
 
+        self.initialized = true;
+        let names: Vec<u32> = self.trays.keys().copied().collect();
+        for name in names {
+            self.create_item(name);
+        }
+    }
+
+    fn add_tray(&mut self, name: u32) {
+        let jay_tray = self.registry.bind(name, 1);
+        self.trays.insert(
+            name,
+            Tray {
+                tray_item: None,
+                surface: None,
+                current_buffer: None,
+                jay_tray,
+                pending_size: None,
+                size: (0, 0),
+                scale: 1,
+                output_name: None,
+            },
+        );
+        if self.initialized {
+            self.create_item(name);
+        }
+    }
+
+    fn create_item(&mut self, name: u32) {
+        let (Some(compositor), Some(tray)) = (&self.compositor, self.trays.get_mut(&name)) else {
+            return;
+        };
         let surface = compositor.create_surface();
-        proxy::set_event_handler(&surface, SurfaceHandler);
-        let tray_item = jay_tray.get_tray_item(&surface);
-        proxy::set_event_handler(&tray_item, TrayItemHandler);
+        proxy::set_event_handler(&surface, SurfaceHandler { tray: name });
+        let tray_item = tray.jay_tray.get_tray_item(&surface);
+        proxy::set_event_handler(&tray_item, TrayItemHandler { tray: name });
 
-        self.surface = Some(surface);
-        self.tray_item = Some(tray_item);
+        tray.surface = Some(surface);
+        tray.tray_item = Some(tray_item);
     }
 
     fn setup_pointer(&mut self) {
@@ -132,25 +197,32 @@ impl State {
         self.pointer = Some(pointer);
     }
 
-    fn on_configure(&mut self, serial: u32) {
-        if let Some(size) = self.pending_size.take() {
-            self.size = size;
+    fn on_configure(&mut self, name: u32, serial: u32) {
+        let Some(tray) = self.trays.get_mut(&name) else { return };
+        // Jay sends wl_surface.enter for the tray's output before the first configure.
+        if self.output.is_some() && tray.output_name != self.output {
+            self.trays.remove(&name);
+            return;
         }
-        self.do_commit(Some(serial));
+        if let Some(size) = tray.pending_size.take() {
+            tray.size = size;
+        }
+        self.do_commit(name, Some(serial));
     }
 
-    fn do_commit(&mut self, serial: Option<u32>) {
-        let (w, h) = self.size;
+    fn do_commit(&mut self, name: u32, serial: Option<u32>) {
+        let Some(tray) = self.trays.get_mut(&name) else { return };
+        let (w, h) = tray.size;
         if w == 0 || h == 0 {
             return;
         }
 
         let Some(shm) = self.shm.clone() else { return };
-        let Some(surface) = self.surface.clone() else { return };
-        let Some(tray_item) = self.tray_item.clone() else { return };
+        let Some(surface) = tray.surface.clone() else { return };
+        let Some(tray_item) = tray.tray_item.clone() else { return };
 
-        let phys_w = w * self.scale;
-        let phys_h = h * self.scale;
+        let phys_w = w * tray.scale;
+        let phys_h = h * tray.scale;
         let pixels = render_icon(self.icon.as_deref(), phys_w as u32, phys_h as u32);
 
         match create_shm_buffer(&shm, &pixels, phys_w, phys_h) {
@@ -158,11 +230,13 @@ impl State {
                 if let Some(s) = serial {
                     tray_item.ack_configure(s);
                 }
-                surface.set_buffer_scale(self.scale);
+                surface.set_buffer_scale(tray.scale);
                 surface.attach(Some(buffer.deref()), 0, 0);
                 surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
                 surface.commit();
-                self.current_buffer = Some(buffer);
+                if let Some(old) = tray.current_buffer.replace(buffer) {
+                    old.destroy();
+                }
             }
             Err(e) => eprintln!("Failed to create buffer: {e}"),
         }
@@ -356,8 +430,12 @@ impl WlRegistryEventHandler for RegistryHandler {
             WlShm::INTERFACE => {
                 state.shm = Some(state.registry.bind(name, 1));
             }
-            JayTrayV1::INTERFACE => {
-                state.jay_tray = Some(state.registry.bind(name, 1));
+            JayTrayV1::INTERFACE => state.add_tray(name),
+            // wl_output.name needs version 4.
+            WlOutput::INTERFACE if state.output.is_some() => {
+                let proxy: WlOutput = state.registry.bind(name, version.min(4));
+                proxy::set_event_handler(&proxy, OutputHandler { global: name });
+                state.outputs.insert(name, Output { proxy, name: None });
             }
             WlSeat::INTERFACE if state.seat.is_none() => {
                 let seat: WlSeat = state.registry.bind(name, version.min(7));
@@ -368,7 +446,12 @@ impl WlRegistryEventHandler for RegistryHandler {
         }
     }
 
-    fn global_remove(&self, _state: &mut State, _slf: &WlRegistryRef, _name: u32) {}
+    fn global_remove(&self, state: &mut State, _slf: &WlRegistryRef, name: u32) {
+        state.trays.remove(&name);
+        if let Some(output) = state.outputs.remove(&name) {
+            output.proxy.release();
+        }
+    }
 }
 
 struct InitialRoundtrip;
@@ -384,20 +467,51 @@ impl WlCallbackEventHandler for InitialRoundtrip {
     }
 }
 
-struct SurfaceHandler;
+struct OutputHandler {
+    global: u32,
+}
 
-impl WlSurfaceEventHandler for SurfaceHandler {
+impl WlOutputEventHandler for OutputHandler {
     type Data = State;
 
-    fn preferred_buffer_scale(&self, state: &mut State, _slf: &WlSurfaceRef, factor: i32) {
-        if state.scale != factor {
-            state.scale = factor;
-            state.do_commit(None);
+    fn name(&self, state: &mut State, _slf: &WlOutputRef, name: &str) {
+        if let Some(output) = state.outputs.get_mut(&self.global) {
+            output.name = Some(name.to_string());
         }
     }
 }
 
-struct TrayItemHandler;
+struct SurfaceHandler {
+    tray: u32,
+}
+
+impl WlSurfaceEventHandler for SurfaceHandler {
+    type Data = State;
+
+    fn enter(&self, state: &mut State, _slf: &WlSurfaceRef, output: Option<&WlOutputRef>) {
+        let Some(output) = output else { return };
+        let name = state
+            .outputs
+            .values()
+            .find(|o| proxy::id(&*o.proxy) == proxy::id(output))
+            .and_then(|o| o.name.clone());
+        if let Some(tray) = state.trays.get_mut(&self.tray) {
+            tray.output_name = name;
+        }
+    }
+
+    fn preferred_buffer_scale(&self, state: &mut State, _slf: &WlSurfaceRef, factor: i32) {
+        let Some(tray) = state.trays.get_mut(&self.tray) else { return };
+        if tray.scale != factor {
+            tray.scale = factor;
+            state.do_commit(self.tray, None);
+        }
+    }
+}
+
+struct TrayItemHandler {
+    tray: u32,
+}
 
 impl JayTrayItemV1EventHandler for TrayItemHandler {
     type Data = State;
@@ -409,7 +523,9 @@ impl JayTrayItemV1EventHandler for TrayItemHandler {
         width: i32,
         height: i32,
     ) {
-        state.pending_size = Some((width, height));
+        if let Some(tray) = state.trays.get_mut(&self.tray) {
+            tray.pending_size = Some((width, height));
+        }
     }
 
     fn preferred_anchor(
@@ -429,7 +545,7 @@ impl JayTrayItemV1EventHandler for TrayItemHandler {
     }
 
     fn configure(&self, state: &mut State, _slf: &JayTrayItemV1Ref, serial: u32) {
-        state.on_configure(serial);
+        state.on_configure(self.tray, serial);
     }
 }
 

@@ -9,6 +9,7 @@ jay-tray-item [OPTIONS]
 
 Options:
       --icon <icon>              PNG or SVG file path, or a freedesktop icon name
+      --output <NAME>            Only show on this output, e.g. DP-1 (see `jay randr`)
       --left-click <CMD>         Shell command to run on left click
       --right-click <CMD>        Shell command to run on right click
       --middle-click <CMD>       Shell command to run on middle click
@@ -17,6 +18,8 @@ Options:
 ```
 
 All options are optional. If no icon is provided, a dark gray square is shown as a fallback.
+
+The icon appears on every monitor unless `--output` is set. Monitors plugged in later are picked up automatically.
 
 ### Examples
 
