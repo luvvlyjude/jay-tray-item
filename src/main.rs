@@ -1,3 +1,5 @@
+// Generated bindings: wl-client-builder leaves bitfield `Iter` structs without an allow.
+#[allow(dead_code)]
 mod protocols {
     include!(concat!(env!("OUT_DIR"), "/wayland-protocols/mod.rs"));
 }
