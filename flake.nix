@@ -15,7 +15,6 @@
       package =
         {
           lib,
-          makeWrapper,
           rustPlatform,
           wayland,
         }:
@@ -34,13 +33,11 @@
           };
           cargoLock.lockFile = ./Cargo.lock;
 
-          nativeBuildInputs = [ makeWrapper ];
-
-          # wl-client dlopen()s libwayland-client.so at runtime; wrap the binary
-          # so the library is on LD_LIBRARY_PATH outside of a nix shell.
-          postInstall = ''
-            wrapProgram $out/bin/jay-tray-item \
-              --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ wayland ]}
+          # wl-client dlopen()s libwayland-client.so at runtime. RUNPATH finds it without
+          # LD_LIBRARY_PATH, which clicked commands would inherit. postFixup is the last hook of
+          # the fixup phase, whose RPATH shrinking would strip this entry as unused.
+          postFixup = ''
+            patchelf --add-rpath ${lib.makeLibraryPath [ wayland ]} $out/bin/jay-tray-item
           '';
 
           meta = {
