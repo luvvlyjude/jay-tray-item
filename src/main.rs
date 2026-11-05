@@ -268,12 +268,18 @@ fn create_shm_buffer(shm: &WlShm, data: &[u8], width: i32, height: i32) -> io::R
 }
 
 fn run_command(cmd: &str) {
-    if let Err(e) = std::process::Command::new("sh")
+    match std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .spawn()
     {
-        eprintln!("Failed to spawn command: {e}");
+        // Reap in the background so finished commands don't stay as zombies.
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => eprintln!("Failed to spawn command: {e}"),
     }
 }
 
